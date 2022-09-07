@@ -1,5 +1,5 @@
 """
-Datasets used in our experiments on (cloned) CIFAR10.
+Datasets used in our experiments on (cloned) CIFAR10/100.
 
 Author  : Sebastian Goldt <sgoldt@sissa.it>
 Date    : August 2022
@@ -8,7 +8,6 @@ Version : 0.1
 """
 
 import os
-from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
 import numpy as np
@@ -25,13 +24,15 @@ sys.path.insert(0, "/u/s/sgoldt/Research/datamodels/")
 from datamodels import censoring
 
 
-class ClonedCIFAR10(VisionDataset):
+class ClonedCIFAR(VisionDataset):
     """
-    Dataset interface for a cloned version of CIFAR10, usually obtained using a
+    Dataset interface for a cloned version of CIFAR10/100, usually obtained using a
     combination of generative model + classifier.
 
     The code is based on the CIFAR10 implementation of pyTorch:
     https://pytorch.org/vision/stable/_modules/torchvision/datasets/cifar.html#CIFAR10
+
+    The CIFAR100 class is just a subclass of that class that redefines some constants.
 
     Args:
         root (string): Root directory of dataset where files exist
@@ -91,15 +92,15 @@ class ClonedCIFAR10(VisionDataset):
         return f"Split: {split}"
 
 
-class GaussianCIFAR10(VisionDataset):
+class GaussianCIFAR(VisionDataset):
     """
-    Dataset interface for a Gaussian clone of CIFAR10, using the censoring library.
+    Dataset interface for a Gaussian clone of CIFAR10/100, using the censoring library.
 
     The code is based on the CIFAR10 implementation of pyTorch:
     https://pytorch.org/vision/stable/_modules/torchvision/datasets/cifar.html#CIFAR10
 
     Args:
-        cifar10_dataset (CIFAR10): loaded CIFAR10 dataset
+        cifar_dataset (CIFAR10/CIFAR100): loaded CIFAR10/100 dataset
         isotropic (bool, optional) : if True, covariances of the Gaussians are isotropic.
         train (bool, optional): If True, creates dataset from training set, otherwise
             creates from test set.
@@ -112,7 +113,7 @@ class GaussianCIFAR10(VisionDataset):
 
     def __init__(
         self,
-        cifar10_dataset: CIFAR10,
+        cifar_dataset: CIFAR10,  # CIFAR100 is a subclass of CIFAR100
         isotropic: bool = False,
         train: bool = True,
         transform: Optional[Callable] = None,
@@ -122,28 +123,28 @@ class GaussianCIFAR10(VisionDataset):
 
         super().__init__(None, transform=transform, target_transform=target_transform)
 
-        if cifar10_dataset.train != train:
-            raise ValueError("mismatch between CIFAR10 data set given and train flag")
+        if cifar_dataset.train != train:
+            raise ValueError("mismatch between CIFAR data set given and train flag")
 
         self.train = train  # training set or test set
 
         # extract inputs, labels
-        cifar10_xs = torch.tensor(cifar10_dataset.data).float()
-        cifar10_ys = torch.tensor(cifar10_dataset.targets)
+        cifar_xs = torch.tensor(cifar_dataset.data).float()
+        cifar_ys = torch.tensor(cifar_dataset.targets)
 
         # create clone
         clone_xs, clone_ys = censoring.censor2d(
-            cifar10_xs, cifar10_ys, isotropic=isotropic
+            cifar_xs, cifar_ys, isotropic=isotropic
         )
 
         self.targets = clone_ys.numpy()
 
         # clamp the inputs to have the right range
         clone_xs = torch.clamp(clone_xs, min=0, max=255)
-        # transform to numpy and
+        # transform to numpy and...
         clone_xs = np.round(clone_xs.numpy())
-        # match datatype of CIFAR10
-        clone_xs = np.array(clone_xs, dtype=cifar10_dataset.data.dtype)
+        # ...match datatype of CIFAR
+        clone_xs = np.array(clone_xs, dtype=cifar_dataset.data.dtype)
         self.data = clone_xs
 
     def __getitem__(self, index: int) -> Tuple[Any, Any]:

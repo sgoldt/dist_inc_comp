@@ -1,9 +1,11 @@
 """
-Experiment to train various neural networks on CIFAR10 or on three different
-clones:
+Experiment to train various neural networks on CIFAR10/CIFAR100 data sets
+or on various clones:
 
 - gpiso   : class-wise Gaussian mixture with correct means, cov = rescaled identity
 - gp      : class-wise Gaussian mixture with correct means, covariance
+- gpc     : Gaussian mixture with correct means, covariance on the full data set with
+            coarse-grained labels (hence more Gaussians than labels!)
 - wgan    : Ensemble of Wasserstein GAN (dcGAN architecture of Radford et al.)
 - cifar5m : CIFAR10 clone by Nakkiran et al.: images sampled from DDPM model of Ho et
             al., labels by an 98.5 correct BigTransfer model.
@@ -29,8 +31,11 @@ import utils  # utility functions for these experiments
 
 # GLOBAL CONSTANTS
 DATASET_ROOT = "/u/s/sgoldt/datasets"
-DATASETS = ["gpiso", "gp", "wgan", "cifar5m", "cifar10"]
-MODELS = ["twolayer", "mlp", "convnet", "resnet18"]
+DATASETS = ["cifar10", "cifar100", "cifar10c", "cifar100c"]
+NUM_CLASSES = {"cifar10": 10, "cifar100": 100, "cifar10c": 2, "cifar100c": 20}
+
+CLONES = ["gpiso", "gp", "gpc", "wgan", "cifar5m"]
+MODELS = ["twolayer", "mlp", "convnet", "resnet18", "resnet50"]
 
 # Default values for optimisation parameters
 # Optimised for Resnet18 according to the recipe of Joost van Amersfoort (y0ast)
@@ -90,10 +95,10 @@ def get_welcome_string(args):
     args : argparse object with the parameters given to the program
     """
     msg = f"""# Distributions of increasing complexity
-# Training model {args.model} on {args.trainon}
+# Dataset: {args.dataset}, clone: {args.clone}, model {args.model}
 # Arguments: {str(args)}
 # (0) epoch, (1) step, (2) train loss, (3) train accuracy, (4) test loss, (5) test accuracy,
-# (6) cifar10 train loss, (7) cifar10 train accuracy, (8) cifar10 test loss, (9) cifar10 accuracy"""
+# (6) cifar train loss, (7) cifar train accuracy, (8) cifar test loss, (9) cifar accuracy"""
     return msg
 
 
@@ -101,8 +106,10 @@ def main():
     parser = argparse.ArgumentParser()
     models_help = "which model to train? " + " | ".join(MODELS)
     parser.add_argument("--model", default="twolayer", help=models_help)
-    trainon_help = "which dataset to train on? " + " | ".join(DATASETS)
-    parser.add_argument("--trainon", default="cifar10", help=trainon_help)
+    dataset_help = "what's the basic dataset? " + " | ".join(DATASETS)
+    parser.add_argument("--dataset", default="cifar10", help=dataset_help)
+    clone_help = "which clone to use for training? " + " | ".join(CLONES)
+    parser.add_argument("--clone", default=None, help=clone_help)
     epochs_help = "number of epochs to train (default: 50)"
     parser.add_argument("--epochs", type=int, default=50, help=epochs_help)
     lr_help = f"learning rate (default: {LR_DEFAULT})"
@@ -130,15 +137,18 @@ def main():
 
     # First set the seed to initialise the network
     torch.manual_seed(args.iseed)
-    # initialise model.
+    # initialise model
+    nc = NUM_CLASSES[args.dataset]
     if args.model == "twolayer":
-        model = models.TwoLayer(width ** 2, 512)  # using grayscale images!
+        # using grayscale images!
+        model = models.TwoLayer(width ** 2, 512, nc)
     elif args.model == "mlp":
-        model = models.MLP(width ** 2, 512)  # using grayscale images!
+        # using grayscale images!
+        model = models.MLP(width ** 2, 512, nc)
     elif args.model == "convnet":
-        model = models.ConvNet()
+        model = models.ConvNet(nc)
     elif args.model == "resnet18":
-        model = models.Resnet18()
+        model = models.Resnet18(nc)
     else:
         raise ValueError("models need to be one of " + ", ".join(MODELS))
     model = model.to(device)
@@ -175,41 +185,67 @@ def main():
         transform["test"] = transforms.Compose([transforms.ToTensor(), norm,])
 
     # Load datasets
-    cifar10_dataset = dict()
+    cifar_dataset = dict()
     # if necessary, load the appropriate clone
-    clone_dataset = None if args.trainon == "cifar10" else dict()
+    clone_dataset = None if args.clone is None else dict()
+    # boolean flag to indicate whether or not we're using CIFAR10
+    is_cifar10 = args.dataset in ["cifar10", "cifar10c"]
+    is_coarse = args.dataset.endswith("c")
+
     for train in [True, False]:
         mode = "train" if train else "test"
 
-        # Load CIFAR10 in any case
-        cifar10_dataset[mode] = datasets.CIFAR10(
+        # Load original data set in any case
+        dset_class = datasets.CIFAR10 if is_cifar10 else datasets.CIFAR100
+        cifar_dataset[mode] = dset_class(
             DATASET_ROOT, train=train, transform=transform[mode], download=True
         )
+        if is_coarse:
+            # coarse grain the labels, from 100 classes down to 20
+            cifar_dataset[mode].targets = utils.cifar_coarse(
+                cifar_dataset[mode].targets, "cifar10" if is_cifar10 else "cifar100"
+            )
 
-        if args.trainon in ["gpiso", "gp"]:
-            clone_dataset[mode] = cdatasets.GaussianCIFAR10(
-                cifar10_dataset[mode],
-                isotropic=(args.trainon == "gpiso"),
+        if args.clone in ["gpiso", "gp"]:
+            clone_dataset[mode] = cdatasets.GaussianCIFAR(
+                cifar_dataset[mode],
+                isotropic=(args.clone == "gpiso"),
                 train=train,
                 transform=transform[mode],
             )
-        elif args.trainon == "wgan":
-            clone_dataset[mode] = cdatasets.ClonedCIFAR10(
-                "./wgan/", "cifar10_wgan_ngf64", train=train, transform=transform[mode],
+        elif args.clone == "wgan":
+            clone_dataset[mode] = cdatasets.ClonedCIFAR(
+                f"./{args.dataset}_wgan/",
+                f"{args.dataset}_wgan_ngf64",
+                train=train,
+                transform=transform[mode],
             )
-        elif args.trainon == "cifar5m":
-            clone_dataset[mode] = cdatasets.ClonedCIFAR10(
+        elif args.clone == "cifar5m":
+            clone_dataset[mode] = cdatasets.ClonedCIFAR(
                 "./cifar5m/", "cifar5m", train=train, transform=transform[mode]
+            )
+        elif args.clone == "gpc":
+            # Load CIFAR10/100 again
+            cifar = dset_class(
+                DATASET_ROOT, train=train, transform=transform[mode], download=True
+            )
+            # Create GP clone based on full 100 classes
+            clone_dataset[mode] = cdatasets.GaussianCIFAR(
+                cifar, isotropic=False, train=train, transform=transform[mode],
+            )
+            # Now coarse grain the labels
+            clone_dataset[mode].targets = utils.cifar_coarse(
+                clone_dataset[mode].targets, "cifar10" if is_cifar10 else "cifar100"
             )
 
     # Create data loaders
-    cifar10_loader = dict()
+    cifar_loader = dict()
     clone_loader = None if clone_dataset is None else dict()
     kwargs = {"num_workers": 2, "pin_memory": True} if device == "cuda" else {}
     for mode in ["train", "test"]:
         bs = args.bs if mode == "train" else 5_000
-        cifar10_loader[mode] = torch.utils.data.DataLoader(
-            cifar10_dataset[mode], batch_size=bs, shuffle=(mode == "train"), **kwargs
+        cifar_loader[mode] = torch.utils.data.DataLoader(
+            cifar_dataset[mode], batch_size=bs, shuffle=(mode == "train"), **kwargs
         )
 
         if clone_loader is not None:
@@ -218,7 +254,7 @@ def main():
             )
 
     # Now select the "target" dataset on which to train
-    target_loader = cifar10_loader if args.trainon == "cifar10" else clone_loader
+    target_loader = cifar_loader if clone_loader is None else clone_loader
 
     # Optimiser: vanilla SGD.
     optimizer = torch.optim.SGD(
@@ -239,7 +275,8 @@ def main():
     steps_to_print[-1] -= 1
 
     # set up logfile
-    fname_root = f"dic_{args.model}_{args.trainon}_bs{args.bs}_lr{args.lr:g}_mom{args.mom:g}_wd{args.wd:g}_iseed{args.iseed}_seed{args.seed}"
+    clone_name = args.dataset if args.clone is None else args.clone
+    fname_root = f"dic_{args.dataset}_{clone_name}_{args.model}_bs{args.bs}_lr{args.lr:g}_mom{args.mom:g}_wd{args.wd:g}_iseed{args.iseed}_seed{args.seed}"
     log_file = open(f"logs/{fname_root}.log", "w", buffering=1)
     welcome = get_welcome_string(args)
     utils.log(welcome, log_file)
@@ -261,17 +298,17 @@ def main():
                     target_msg += f"{loss:.4g}, {accuracy:.4g}, "
 
                 # if training on clone, also evaluate on cifar10
-                cifar10_msg = ""
-                if args.trainon != "cifar10":
+                cifar_msg = ""
+                if args.clone is not None:
                     for mode in ["train", "test"]:
-                        loss, accuracy = evaluate(model, cifar10_loader[mode], device)
-                        cifar10_msg += f"{loss:.4g}, {accuracy:.4g}, "
+                        loss, accuracy = evaluate(model, cifar_loader[mode], device)
+                        cifar_msg += f"{loss:.4g}, {accuracy:.4g}, "
                 else:
-                    # For consistency of log files, repeat loss and accuracy when training on CIFAR10
-                    cifar10_msg = target_msg
+                    # For consistency of log files, repeat loss and accuracy when training on CIFAR10/100
+                    cifar_msg = target_msg
 
                 # remove trailing comma to avoid problems loading output
-                msg = f"{epoch}, {num_steps}, " + target_msg + cifar10_msg[:-2]
+                msg = f"{epoch}, {num_steps}, " + target_msg + cifar_msg[:-2]
                 utils.log(msg, log_file)
                 model.train()
 

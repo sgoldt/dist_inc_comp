@@ -23,7 +23,7 @@ class TwoLayer(nn.Module):
     GOAL: baseline model, confirmed on MNIST by Maria's experiment.
     """
 
-    def __init__(self, D, K):
+    def __init__(self, D, K, num_classes=10):
         """
         Parameters:
         -----------
@@ -33,7 +33,7 @@ class TwoLayer(nn.Module):
         """
         super().__init__()
         self.fc1 = nn.Linear(D, K)
-        self.fc2 = nn.Linear(K, 10)
+        self.fc2 = nn.Linear(K, num_classes)
 
     def forward(self, x):
         x = self.fc1(x.squeeze())
@@ -54,7 +54,7 @@ class MLP(nn.Module):
     GOAL: investigate the impact of depth.
     """
 
-    def __init__(self, D, K):
+    def __init__(self, D, K, num_classes):
         """
         Parameters:
         -----------
@@ -66,7 +66,7 @@ class MLP(nn.Module):
         self.fc1 = nn.Linear(D, K)
         self.fc2 = nn.Linear(K, K)
         self.fc3 = nn.Linear(K, K)
-        self.fc4 = nn.Linear(K, 10)
+        self.fc4 = nn.Linear(K, num_classes)
 
     def forward(self, x):
         x = F.relu(self.fc1(x.squeeze()))
@@ -90,14 +90,18 @@ class ConvNet(nn.Module):
 
     """
 
-    def __init__(self):
+    def __init__(self, num_classes=10):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 6, 5)
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(6, 16, 5)
         self.fc1 = nn.Linear(16 * 5 * 5, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
+        if num_classes < 100:
+            self.fc2 = nn.Linear(120, 84)
+            self.fc3 = nn.Linear(84, num_classes)
+        else:
+            self.fc2 = nn.Linear(120, 120)
+            self.fc3 = nn.Linear(120, num_classes)
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
@@ -123,15 +127,36 @@ class Resnet18(torch.nn.Module):
 
     """
 
-    def __init__(self):
+    def __init__(self, num_classes=10):
         super().__init__()
 
-        self.resnet = models.resnet18(pretrained=False, num_classes=10)
+        self.resnet = models.resnet18(pretrained=False, num_classes=num_classes)
 
         self.resnet.conv1 = torch.nn.Conv2d(
             3, 64, kernel_size=3, stride=1, padding=1, bias=False
         )
         self.resnet.maxpool = torch.nn.Identity()
+
+    def forward(self, x):
+        x = self.resnet(x)
+
+        x = F.log_softmax(x, dim=1)
+
+        return x
+
+
+class Resnet50(torch.nn.Module):
+    """
+    Resnet50
+
+    GOAL: what does an interpolator do?
+
+    """
+
+    def __init__(self):
+        super().__init__()
+
+        self.resnet = models.resnet50(pretrained=False, num_classes=10)
 
     def forward(self, x):
         x = self.resnet(x)
