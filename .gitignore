@@ -1,12 +1,13 @@
 .DS_Store
 *ipynb
-biggan/*
 *pdf
-cifar5m/*
-dcgan/*
-dcgan_resnet18/*
+*png
 weights/*
-wgan
+cifar10_biggan/*
+cifar10_cifar5m/*
+cifar10_dcgan/*
+cifar10_dcgan_resnet18/*
+cifar10_wgan
 
 # Created by https://www.toptal.com/developers/gitignore/api/python
 # Edit at https://www.toptal.com/developers/gitignore?templates=python

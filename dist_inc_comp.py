@@ -35,7 +35,7 @@ DATASETS = ["cifar10", "cifar100", "cifar10c", "cifar100c"]
 NUM_CLASSES = {"cifar10": 10, "cifar100": 100, "cifar10c": 2, "cifar100c": 20}
 
 CLONES = ["gpiso", "gp", "gpc", "wgan", "cifar5m"]
-MODELS = ["twolayer", "mlp", "convnet", "resnet18", "resnet50"]
+MODELS = ["linear", "twolayer", "mlp", "convnet", "resnet18", "densenet"]
 
 # Default values for optimisation parameters
 # Optimised for Resnet18 according to the recipe of Joost van Amersfoort (y0ast)
@@ -110,6 +110,8 @@ def main():
     parser.add_argument("--dataset", default="cifar10", help=dataset_help)
     clone_help = "which clone to use for training? " + " | ".join(CLONES)
     parser.add_argument("--clone", default=None, help=clone_help)
+    checkpoint_help = "checkpoint model weights"
+    parser.add_argument("--checkpoint", action="store_true", help=checkpoint_help)
     epochs_help = "number of epochs to train (default: 50)"
     parser.add_argument("--epochs", type=int, default=50, help=epochs_help)
     lr_help = f"learning rate (default: {LR_DEFAULT})"
@@ -139,9 +141,14 @@ def main():
     torch.manual_seed(args.iseed)
     # initialise model
     nc = NUM_CLASSES[args.dataset]
-    if args.model == "twolayer":
+    if args.model == "linear":
         # using grayscale images!
-        model = models.TwoLayer(width ** 2, 512, nc)
+        model = models.Linear(width ** 2, 512, nc)
+    elif args.model == "twolayer":
+        # using grayscale images!
+        K = 512 if args.dataset == "cifar10" else 2048
+        model = models.TwoLayer(width ** 2, K, nc)
+        print(model)
     elif args.model == "mlp":
         # using grayscale images!
         model = models.MLP(width ** 2, 512, nc)
@@ -149,6 +156,8 @@ def main():
         model = models.ConvNet(nc)
     elif args.model == "resnet18":
         model = models.Resnet18(nc)
+    elif args.model == "densenet":
+        model = models.DenseNet(nc)
     else:
         raise ValueError("models need to be one of " + ", ".join(MODELS))
     model = model.to(device)
@@ -171,8 +180,8 @@ def main():
     for mode in ["train", "test"]:
         transform[mode] = transforms.Compose(transform_list)
 
-    # Resnet18 transforms
-    if args.model == "resnet18":
+    # Advanced transforms for Resnet18, Densent
+    if args.model in ["resnet18", "densenet"]:
         norm = transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
         transform["train"] = transforms.Compose(
             [
@@ -187,6 +196,10 @@ def main():
     # Load datasets
     cifar_dataset = dict()
     # if necessary, load the appropriate clone
+    if args.clone is not None:
+        if args.clone.lower() == "none":
+            args.clone = None
+
     clone_dataset = None if args.clone is None else dict()
     # boolean flag to indicate whether or not we're using CIFAR10
     is_cifar10 = args.dataset in ["cifar10", "cifar10c"]
@@ -222,7 +235,7 @@ def main():
             )
         elif args.clone == "cifar5m":
             clone_dataset[mode] = cdatasets.ClonedCIFAR(
-                "./cifar5m/", "cifar5m", train=train, transform=transform[mode]
+                "./cifar10_cifar5m/", "cifar5m", train=train, transform=transform[mode]
             )
         elif args.clone == "gpc":
             # Load CIFAR10/100 again
@@ -265,6 +278,10 @@ def main():
         milestones = [25, 40]
         scheduler = torch.optim.lr_scheduler.MultiStepLR(
             optimizer, milestones=milestones, gamma=0.1
+        )
+    elif args.model == "densenet":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.epochs
         )
 
     num_steps = 0  # number of actual SGD steps
@@ -310,6 +327,13 @@ def main():
                 # remove trailing comma to avoid problems loading output
                 msg = f"{epoch}, {num_steps}, " + target_msg + cifar_msg[:-2]
                 utils.log(msg, log_file)
+
+                if args.checkpoint:
+                    torch.save(
+                        model.state_dict(),
+                        f"weights/{fname_root}_model_step{num_steps}.pt",
+                    )
+
                 model.train()
 
             data = data.to(device)

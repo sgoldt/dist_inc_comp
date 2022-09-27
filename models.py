@@ -45,6 +45,38 @@ class TwoLayer(nn.Module):
         return x
 
 
+class Linear(nn.Module):
+    """
+    Deep linear network.
+
+    What does a linear network trained using mean-squared error do?
+    """
+
+    def __init__(self, D, K, num_classes=10):
+        """
+        Parameters:
+        -----------
+
+        D : input dimension
+        K : number of hidden neurons
+        """
+        super().__init__()
+        self.fc1 = nn.Linear(D, K)
+        self.fc2 = nn.Linear(K, K)
+        self.fc3 = nn.Linear(K, K)
+        self.fc4 = nn.Linear(K, num_classes)
+
+    def forward(self, x):
+        x = self.fc1(x.squeeze())
+        x = self.fc2(x)
+        x = self.fc3(x)
+        x = self.fc4(x)
+
+        x = F.log_softmax(x, dim=1)
+
+        return x
+
+
 class MLP(nn.Module):
     """
     Simple rectangular fully-connected multi-layer perceptron.
@@ -145,21 +177,23 @@ class Resnet18(torch.nn.Module):
         return x
 
 
-class Resnet50(torch.nn.Module):
+class DenseNet(torch.nn.Module):
     """
-    Resnet50
+    DenseNet for CIFAR following
+    https://github.com/kuangliu/pytorch-cifar/blob/master/models/densenet.py
 
     GOAL: what does an interpolator do?
-
     """
 
-    def __init__(self):
+    def __init__(self, num_classes=10):
         super().__init__()
 
-        self.resnet = models.resnet50(pretrained=False, num_classes=10)
+        self.densenet = models.DenseNet(
+            block_config=[6, 12, 24, 16], growth_rate=12, num_classes=num_classes
+        )
 
     def forward(self, x):
-        x = self.resnet(x)
+        x = self.densenet(x)
 
         x = F.log_softmax(x, dim=1)
 
