@@ -28,6 +28,7 @@ from torchvision import datasets, transforms
 import cdatasets  # The datasets defined for this experiment
 import models  # The models defined for this experiment
 import utils  # utility functions for these experiments
+from vit import ViT
 
 # GLOBAL CONSTANTS
 DATASET_ROOT = "/u/s/sgoldt/datasets"
@@ -35,7 +36,7 @@ DATASETS = ["cifar10", "cifar100", "cifar10c", "cifar100c"]
 NUM_CLASSES = {"cifar10": 10, "cifar100": 100, "cifar10c": 2, "cifar100c": 20}
 
 CLONES = ["gpiso", "gp", "gpc", "wgan", "cifar5m"]
-MODELS = ["linear", "twolayer", "mlp", "convnet", "resnet18", "densenet"]
+MODELS = ["linear", "twolayer", "mlp", "convnet", "resnet18", "densenet", "vit"]
 
 # Default values for optimisation parameters
 # Optimised for Resnet18 according to the recipe of Joost van Amersfoort (y0ast)
@@ -158,6 +159,20 @@ def main():
         model = models.Resnet18(nc)
     elif args.model == "densenet":
         model = models.DenseNet(nc)
+    elif args.model == "vit":
+        # ViT for cifar10 with standard settings taken from
+        # https://github.com/kentaroy47/vision-transformers-cifar10/blob/main/train_cifar10.py
+        model = ViT(
+            image_size=32,
+            patch_size=4,
+            num_classes=10,
+            dim=512,
+            depth=6,
+            heads=8,
+            mlp_dim=512,
+            dropout=0.1,
+            emb_dropout=0.1,
+        )
     else:
         raise ValueError("models need to be one of " + ", ".join(MODELS))
     model = model.to(device)
@@ -181,7 +196,7 @@ def main():
         transform[mode] = transforms.Compose(transform_list)
 
     # Advanced transforms for Resnet18, Densent
-    if args.model in ["resnet18", "densenet"]:
+    if args.model in ["resnet18", "densenet", "vit"]:
         norm = transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
         transform["train"] = transforms.Compose(
             [
@@ -279,9 +294,9 @@ def main():
         scheduler = torch.optim.lr_scheduler.MultiStepLR(
             optimizer, milestones=milestones, gamma=0.1
         )
-    elif args.model == "densenet":
+    elif args.model in ["densenet", "vit"]:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=args.epochs
+            optimizer, args.epochs
         )
 
     num_steps = 0  # number of actual SGD steps
