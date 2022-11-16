@@ -140,7 +140,7 @@ def main():
     parser.add_argument("--et", action="store_true", help="evaluate the train error")
     soft_help = "don't overwrite existing log files"
     parser.add_argument("--soft", action="store_true", help=soft_help)
-    parser.add_argument("--dsetroot", help="Root for pytorch data sets")
+    parser.add_argument("--dsetroot", default="~/datasets", help="Root for pytorch data sets")
     parser.add_argument("--dummy", action="store_true", help="dummy option")
     parser.add_argument(
         "--pretrained", action="store_true", help="evaluate the train error"
@@ -225,13 +225,7 @@ def main():
         transform[mode] = transforms.Compose(transform_list)
 
     # Advanced transforms for convolutional networks
-    if args.model in [
-        "convnet",
-        "resnet18",
-        "densenet121",
-        "wide_resnet50_2",
-        "vit"
-    ]:
+    if args.model in ["convnet", "resnet18", "densenet121", "wide_resnet50_2", "vit"]:
         norm = transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
         transform["train"] = transforms.Compose(
             [

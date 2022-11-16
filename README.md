@@ -29,7 +29,22 @@ statistics during training.
 # Usage
 
 The key programme to train the network on distributions of increasing complexity
-is ```dist_inc_comp.py```.
+is ```dist_inc_comp.py```. Running the programme with the ```--help``` option
+yields an overview over the options.
+
+To train a ResNet18 on CIFAR10, simply run
+```
+python dist_inc_comp.py --model resnet18 --dataset cifar10
+```
+If instead you would like to train the ResNet18 on a Gaussian mixture, and test
+it on CIFAR10 (that's the green line in the plot above), call
+```
+python dist_inc_comp.py --model resnet18 --dataset cifar10 --clone gp
+```
+where ```gp``` indicates that the clone to be used for training is the Gaussian 
+process. If you would like to train the model on the GAN data set or on cifar5m,
+please contact Sebastian directly while we figure out a better way to share the
+raw data sets.
 
 # Requirements
 
