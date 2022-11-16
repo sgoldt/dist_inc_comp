@@ -17,11 +17,8 @@ from PIL import Image
 import torch
 from torchvision.datasets import CIFAR10, VisionDataset
 
-# Load the censoring model directly from the source
-import sys
-
-sys.path.insert(0, "/u/s/sgoldt/Research/datamodels/")
-from datamodels import censoring
+# Code to create Gaussian clones
+import censoring
 
 
 class ClonedCIFAR(VisionDataset):

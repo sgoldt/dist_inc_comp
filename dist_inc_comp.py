@@ -18,8 +18,11 @@ Version : 0.1
 from __future__ import print_function
 
 import argparse
+import os
 
 import numpy as np
+
+import timm  # advanced, pre-trained image models
 
 import torch
 import torch.nn.functional as F
@@ -27,27 +30,33 @@ from torchvision import datasets, transforms
 
 import cdatasets  # The datasets defined for this experiment
 import models  # The models defined for this experiment
-import utils  # utility functions for these experiments
 from vit import ViT
+import utils  # utility functions for these experiments
 
 # GLOBAL CONSTANTS
-DATASET_ROOT = "/u/s/sgoldt/datasets"
 DATASETS = ["cifar10", "cifar100", "cifar10c", "cifar100c"]
 NUM_CLASSES = {"cifar10": 10, "cifar100": 100, "cifar10c": 2, "cifar100c": 20}
 
 CLONES = ["gpiso", "gp", "gpc", "wgan", "cifar5m"]
-MODELS = ["linear", "twolayer", "mlp", "convnet", "resnet18", "densenet", "vit"]
+MODELS = [  # all the different architectures
+    "twolayer",
+    "convnet",
+    "resnet18",
+    "densenet121",
+    "vit",
+    "wide_resnet50_2",
+]
+# all the models that require vector inputs (and grayscale images)
+vector_models = ["linear", "twolayer"]
 
-# Default values for optimisation parameters
-# Optimised for Resnet18 according to the recipe of Joost van Amersfoort (y0ast)
-# https://github.com/y0ast/pytorch-snippets/tree/main/minimal_cifar
+# Default values for optimisation parameters, taken from the classic ImageNet paper
 LR_DEFAULT = 0.05
 WD_DEFAULT = 5e-4
 MOM_DEFAULT = 0.9
 BS_DEFAULT = 128
 
 
-def evaluate(model, loader, device="cpu"):
+def evaluate(model, loader, loss_fn, device="cpu"):
     """Evaluates the given model on the dataset provided by the given loader.
 
     Parameters:
@@ -57,6 +66,7 @@ def evaluate(model, loader, device="cpu"):
         that the model provides the output of a softmax followed by a logarithm,
         for example as computed by the eponymous F.log_softmax
     loader : pyTorch data loader object
+    loss_fn : callable that computes the loss
     device : string indicating the device on which we run.
 
     Returns:
@@ -76,12 +86,12 @@ def evaluate(model, loader, device="cpu"):
             target = target.to(device)
 
             prediction = model(data)
-            loss += F.nll_loss(prediction, target, reduction="sum")
+            loss += loss_fn(prediction, target)
 
             prediction = prediction.max(1)[1]
             correct += prediction.eq(target.view_as(prediction)).sum().item()
 
-    loss /= len(loader.dataset)
+    loss /= len(loader)
     accuracy = correct / len(loader.dataset)
 
     return loss, accuracy
@@ -127,6 +137,14 @@ def main():
     iseed_help = "random seed to initialise the network (default: 0)"
     parser.add_argument("--iseed", type=int, default=1, help=iseed_help)
     parser.add_argument("--device", help="device on which to train: cpu | cuda")
+    parser.add_argument("--et", action="store_true", help="evaluate the train error")
+    soft_help = "don't overwrite existing log files"
+    parser.add_argument("--soft", action="store_true", help=soft_help)
+    parser.add_argument("--dsetroot", help="Root for pytorch data sets")
+    parser.add_argument("--dummy", action="store_true", help="dummy option")
+    parser.add_argument(
+        "--pretrained", action="store_true", help="evaluate the train error"
+    )
     # parser.add_argument("--debug", action="store_true", help="evaluate after each epoch")
 
     args = parser.parse_args()
@@ -142,23 +160,34 @@ def main():
     torch.manual_seed(args.iseed)
     # initialise model
     nc = NUM_CLASSES[args.dataset]
-    if args.model == "linear":
-        # using grayscale images!
-        model = models.Linear(width ** 2, 512, nc)
-    elif args.model == "twolayer":
+    if args.model == "twolayer":
         # using grayscale images!
         K = 512 if args.dataset == "cifar10" else 2048
-        model = models.TwoLayer(width ** 2, K, nc)
-        print(model)
-    elif args.model == "mlp":
-        # using grayscale images!
-        model = models.MLP(width ** 2, 512, nc)
+        model = models.TwoLayer(width**2, K, nc)
     elif args.model == "convnet":
         model = models.ConvNet(nc)
-    elif args.model == "resnet18":
-        model = models.Resnet18(nc)
-    elif args.model == "densenet":
-        model = models.DenseNet(nc)
+    elif args.model in ["resnet18", "wide_resnet50_2"]:
+        model = timm.create_model(args.model, pretrained=args.pretrained)
+
+        # make initial convolutions downsample less
+        model.conv1 = torch.nn.Conv2d(
+            3, 64, kernel_size=3, stride=1, padding=1, bias=False
+        )
+        model.maxpool = torch.nn.Identity()
+
+        # Bring it down to ten classes
+        model.fc = torch.nn.Linear(model.fc.in_features, nc)
+    elif args.model == "densenet121":
+        model = timm.create_model("densenet121", pretrained=args.pretrained)
+
+        # make initial convolutions downsample less
+        model.features.conv0 = torch.nn.Conv2d(
+            3, 64, kernel_size=3, stride=1, padding=1, bias=False
+        )
+        model.features.pool0 = torch.nn.Identity()
+
+        # Bring it down to ten classes, apply the softmax
+        model.classifier = torch.nn.Linear(model.classifier.in_features, nc)
     elif args.model == "vit":
         # ViT for cifar10 with standard settings taken from
         # https://github.com/kentaroy47/vision-transformers-cifar10/blob/main/train_cifar10.py
@@ -186,17 +215,23 @@ def main():
         transforms.ToTensor(),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ]
-    if args.model in ["twolayer", "mlp"]:
+    if args.model in vector_models:
         # Transform to grayscale, vectorise
         transform_list += [
             transforms.Grayscale(),
-            utils.FlattenTransform(width ** 2),
+            utils.FlattenTransform(width**2),
         ]
     for mode in ["train", "test"]:
         transform[mode] = transforms.Compose(transform_list)
 
-    # Advanced transforms for Resnet18, Densent
-    if args.model in ["resnet18", "densenet", "vit"]:
+    # Advanced transforms for convolutional networks
+    if args.model in [
+        "convnet",
+        "resnet18",
+        "densenet121",
+        "wide_resnet50_2",
+        "vit"
+    ]:
         norm = transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
         transform["train"] = transforms.Compose(
             [
@@ -206,7 +241,12 @@ def main():
                 norm,
             ]
         )
-        transform["test"] = transforms.Compose([transforms.ToTensor(), norm,])
+        transform["test"] = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                norm,
+            ]
+        )
 
     # Load datasets
     cifar_dataset = dict()
@@ -226,7 +266,7 @@ def main():
         # Load original data set in any case
         dset_class = datasets.CIFAR10 if is_cifar10 else datasets.CIFAR100
         cifar_dataset[mode] = dset_class(
-            DATASET_ROOT, train=train, transform=transform[mode], download=True
+            args.dsetroot, train=train, transform=transform[mode], download=True
         )
         if is_coarse:
             # coarse grain the labels, from 100 classes down to 20
@@ -255,11 +295,14 @@ def main():
         elif args.clone == "gpc":
             # Load CIFAR10/100 again
             cifar = dset_class(
-                DATASET_ROOT, train=train, transform=transform[mode], download=True
+                args.dsetroot, train=train, transform=transform[mode], download=True
             )
             # Create GP clone based on full 100 classes
             clone_dataset[mode] = cdatasets.GaussianCIFAR(
-                cifar, isotropic=False, train=train, transform=transform[mode],
+                cifar,
+                isotropic=False,
+                train=train,
+                transform=transform[mode],
             )
             # Now coarse grain the labels
             clone_dataset[mode].targets = utils.cifar_coarse(
@@ -278,7 +321,10 @@ def main():
 
         if clone_loader is not None:
             clone_loader[mode] = torch.utils.data.DataLoader(
-                clone_dataset[mode], batch_size=bs, shuffle=(mode == "train"), **kwargs,
+                clone_dataset[mode],
+                batch_size=bs,
+                shuffle=(mode == "train"),
+                **kwargs,
             )
 
     # Now select the "target" dataset on which to train
@@ -288,16 +334,8 @@ def main():
     optimizer = torch.optim.SGD(
         model.parameters(), lr=args.lr, momentum=args.mom, weight_decay=args.wd
     )
-    scheduler = None
-    if args.model == "resnet18":
-        milestones = [25, 40]
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(
-            optimizer, milestones=milestones, gamma=0.1
-        )
-    elif args.model in ["densenet", "vit"]:
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, args.epochs
-        )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
+    loss_fn = F.cross_entropy
 
     num_steps = 0  # number of actual SGD steps
     log_total_num_steps = np.log10(args.epochs * len(target_loader["train"]))
@@ -308,8 +346,14 @@ def main():
 
     # set up logfile
     clone_name = args.dataset if args.clone is None else args.clone
-    fname_root = f"dic_{args.dataset}_{clone_name}_{args.model}_bs{args.bs}_lr{args.lr:g}_mom{args.mom:g}_wd{args.wd:g}_iseed{args.iseed}_seed{args.seed}"
-    log_file = open(f"logs/{fname_root}.log", "w", buffering=1)
+    model_name = args.model + ("_pretrained" if args.pretrained else "")
+    fname_root = f"dic_{args.dataset}_{clone_name}_{model_name}_bs{args.bs}_lr{args.lr:g}_mom{args.mom:g}_wd{args.wd:g}_iseed{args.iseed}_seed{args.seed}"
+    log_file_path = f"{fname_root}.log"
+    # make sure that there doesn't already exist a logfile with this filename
+    if args.soft and os.path.isfile(log_file_path):
+        print(f"Logfile {fname_root} already exists, will exit now")
+        return
+    log_file = open(log_file_path, "w", buffering=1)
     welcome = get_welcome_string(args)
     utils.log(welcome, log_file)
 
@@ -325,18 +369,33 @@ def main():
 
                 # Always evaluate on target data set first
                 target_msg = ""
-                for mode in ["train", "test"]:
-                    loss, accuracy = evaluate(model, target_loader[mode], device)
+                if args.et:
+                    loss, accuracy = evaluate(
+                        model, target_loader["train"], loss_fn, device
+                    )
                     target_msg += f"{loss:.4g}, {accuracy:.4g}, "
+                else:
+                    target_msg += "nan, nan, "
+                loss, accuracy = evaluate(model, target_loader["test"], loss_fn, device)
+                target_msg += f"{loss:.4g}, {accuracy:.4g}, "
 
                 # if training on clone, also evaluate on cifar10
                 cifar_msg = ""
                 if args.clone is not None:
-                    for mode in ["train", "test"]:
-                        loss, accuracy = evaluate(model, cifar_loader[mode], device)
+                    if args.et:
+                        loss, accuracy = evaluate(
+                            model, cifar_loader["train"], loss_fn, device
+                        )
                         cifar_msg += f"{loss:.4g}, {accuracy:.4g}, "
+                    else:
+                        cifar_msg += "nan, nan, "
+                    loss, accuracy = evaluate(
+                        model, cifar_loader["test"], loss_fn, device
+                    )
+                    cifar_msg += f"{loss:.4g}, {accuracy:.4g}, "
                 else:
-                    # For consistency of log files, repeat loss and accuracy when training on CIFAR10/100
+                    # For consistency of log files, repeat loss and accuracy
+                    # when training on CIFAR10/100
                     cifar_msg = target_msg
 
                 # remove trailing comma to avoid problems loading output
@@ -357,7 +416,8 @@ def main():
             optimizer.zero_grad()
 
             prediction = model(data)
-            loss = F.nll_loss(prediction, target)
+
+            loss = loss_fn(prediction, target)
 
             loss.backward()
             optimizer.step()
@@ -366,7 +426,8 @@ def main():
         if scheduler is not None:
             scheduler.step()
 
-    torch.save(model.state_dict(), f"weights/{fname_root}_model.pt")
+    if args.checkpoint:
+        torch.save(model.state_dict(), f"weights/{fname_root}_model.pt")
 
 
 if __name__ == "__main__":

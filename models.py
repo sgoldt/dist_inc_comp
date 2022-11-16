@@ -9,12 +9,13 @@ Version : 0.1
 
 """
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from torchvision import models  # for Resnet18
-
 
 class TwoLayer(nn.Module):
     """
@@ -39,74 +40,6 @@ class TwoLayer(nn.Module):
         x = self.fc1(x.squeeze())
         x = F.relu(x)
         x = self.fc2(x)
-
-        x = F.log_softmax(x, dim=1)
-
-        return x
-
-
-class Linear(nn.Module):
-    """
-    Deep linear network.
-
-    What does a linear network trained using mean-squared error do?
-    """
-
-    def __init__(self, D, K, num_classes=10):
-        """
-        Parameters:
-        -----------
-
-        D : input dimension
-        K : number of hidden neurons
-        """
-        super().__init__()
-        self.fc1 = nn.Linear(D, K)
-        self.fc2 = nn.Linear(K, K)
-        self.fc3 = nn.Linear(K, K)
-        self.fc4 = nn.Linear(K, num_classes)
-
-    def forward(self, x):
-        x = self.fc1(x.squeeze())
-        x = self.fc2(x)
-        x = self.fc3(x)
-        x = self.fc4(x)
-
-        x = F.log_softmax(x, dim=1)
-
-        return x
-
-
-class MLP(nn.Module):
-    """
-    Simple rectangular fully-connected multi-layer perceptron.
-
-    TODO: add batch norm to facilitate training - could of course impact effects.
-
-    GOAL: investigate the impact of depth.
-    """
-
-    def __init__(self, D, K, num_classes):
-        """
-        Parameters:
-        -----------
-
-        D : input dimension
-        K : number of hidden neurons
-        """
-        super().__init__()
-        self.fc1 = nn.Linear(D, K)
-        self.fc2 = nn.Linear(K, K)
-        self.fc3 = nn.Linear(K, K)
-        self.fc4 = nn.Linear(K, num_classes)
-
-    def forward(self, x):
-        x = F.relu(self.fc1(x.squeeze()))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
-        x = self.fc4(x)
-
-        x = F.log_softmax(x, dim=1)
 
         return x
 
@@ -143,8 +76,6 @@ class ConvNet(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
 
-        x = F.log_softmax(x, dim=1)
-
         return x
 
 
@@ -172,29 +103,51 @@ class Resnet18(torch.nn.Module):
     def forward(self, x):
         x = self.resnet(x)
 
-        x = F.log_softmax(x, dim=1)
-
         return x
 
 
-class DenseNet(torch.nn.Module):
+class AlexNet(nn.Module):
     """
-    DenseNet for CIFAR following
-    https://github.com/kuangliu/pytorch-cifar/blob/master/models/densenet.py
+    AlexNet implementation as described in [1]
 
-    GOAL: what does an interpolator do?
+
+    [1] Alex Krizhevsky: One weird trick for parallelizing
+    convolutional neural networks <https://arxiv.org/abs/1404.5997>
+
     """
-
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes: int = 1000, dropout: float = 0.5) -> None:
         super().__init__()
-
-        self.densenet = models.DenseNet(
-            block_config=[6, 12, 24, 16], growth_rate=12, num_classes=num_classes
+        _log_api_usage_once(self)
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+            nn.Conv2d(64, 192, kernel_size=5, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+            nn.Conv2d(192, 384, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(384, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+        )
+        self.avgpool = nn.AdaptiveAvgPool2d((6, 6))
+        self.classifier = nn.Sequential(
+            nn.Dropout(p=dropout),
+            nn.Linear(256 * 6 * 6, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=dropout),
+            nn.Linear(4096, 4096),
+            nn.ReLU(inplace=True),
+            nn.Linear(4096, num_classes),
         )
 
-    def forward(self, x):
-        x = self.densenet(x)
-
-        x = F.log_softmax(x, dim=1)
-
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.features(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.classifier(x)
         return x
+

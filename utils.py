@@ -15,8 +15,8 @@ import torch
 
 # Animals vs objects is not balanced...
 _CIFAR_COARSE_LABELS = {}
-_CIFAR_COARSE_LABELS["cifar10"] = np.array([0, 0, 0, 0, 0,
-                                            1, 1, 1, 1, 1])
+_CIFAR_COARSE_LABELS["cifar10"] = np.array([0, 0, 0, 1, 1,
+                                            1, 1, 1, 0, 0])
 
 # CIFAR100 coarse grained labels
 # Thanks to Ryan Chan for this snippet
