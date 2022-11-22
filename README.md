@@ -2,7 +2,7 @@
 
 This respository contains code to accompany the paper "Neural networks trained
 with SGD learn distributions of increasing complexity"
-[arXiv:2211.xxxxx](https://arxiv.org/abs/2211.xxxxx) by M. Refinetti, A. Ingrosso, and
+[[arXiv:2211.11567](https://arxiv.org/abs/2211.11567)] by M. Refinetti, A. Ingrosso, and
 S. Goldt.
 
 # In a nutshell
